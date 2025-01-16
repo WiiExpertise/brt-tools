@@ -83,11 +83,16 @@
 		{
 			const assetLookup = {};
 
-			const hash = parseInt(fileReader.readBytes(8).readBigInt64LE(0));
+			const rawHash = fileReader.readBytes(8);
+			const hash = BigInt(rawHash.readBigInt64LE(0));
+
+			// Convert rawHash to hex string
+			const hexHash = rawHash.toString('hex');
 			const bundleRefIndex = fileReader.readBytes(4).readUInt32LE(0);
 			const assetIndex = fileReader.readBytes(4).readUInt32LE(0);
 
-			assetLookup["Hash"] = hash;
+			assetLookup["Hash"] = hash.toString();
+			assetLookup["HexHash"] = hexHash;
 			assetLookup["BundleRefIndex"] = bundleRefIndex;
 			assetLookup["AssetIndex"] = assetIndex;
 
