@@ -1,0 +1,1 @@
+.\node_modules\.bin\esbuild brtTools.js --bundle --minify --platform=node --target=node14.17.0 --outfile=brtTools_build.js & nexe --build -i brtTools_build.js -t x64-14.15.3 -r "utils/**/*" -r "lookupFiles/*.json" -o "brtTools.exe" --verbose & del brtTools_build.js
