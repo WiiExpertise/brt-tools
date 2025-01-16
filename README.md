@@ -5,7 +5,6 @@ This tool allows for reading, writing, and converting BundleRefTable resources f
 - Convert BRT .res file to .json
 
 ## To Do List
-- Fix reading the primary instance GUID from the resource
 - Add JSON to RES support
 
 ## Usage

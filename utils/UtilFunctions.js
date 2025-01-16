@@ -1,13 +1,18 @@
 function readGUID(data) {
-  
-    // Convert the buffer to a hex string
-    let guid = data.toString('hex');
-  
-    // Format the GUID string
-    guid = `${guid.slice(0, 8)}-${guid.slice(8, 12)}-${guid.slice(12, 16)}-${guid.slice(16, 20)}-${guid.slice(20)}`;
-  
-    return guid;
-  }
+  // Extract and reverse each segment
+  const reverseHex = (buffer, start, end) => 
+      buffer.slice(start, end).toString('hex').match(/../g).reverse().join('');
+
+  const guid = [
+      reverseHex(data, 0, 4),  // Reverse first 4 bytes
+      reverseHex(data, 4, 6), // Reverse next 2 bytes
+      reverseHex(data, 6, 8), // Reverse next 2 bytes
+      data.slice(8, 10).toString('hex'),
+      data.slice(10, 16).toString('hex')
+  ].join('-');
+
+  return guid;
+}
 
 module.exports = {
     readGUID
