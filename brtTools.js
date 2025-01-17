@@ -8,6 +8,13 @@
 	// Version number constant
 	const VERSION_STRING = "vDEV";
 
+	// Global constants
+	const BRT_HEADER_SIZE = 0x70;
+	const BRT_BUNDLE_REF_SIZE = 0x18;
+	const BRT_ASSET_SIZE = 0x10;
+	const BRT_ASSET_LOOKUP_SIZE = 0x10;
+	const BRT_BUNDLE_SIZE = 0x10;
+
 	// Global variables
 	let assetLookupsPtr;
 	let bundleRefsPtr;
@@ -167,7 +174,7 @@
 			console.log("Weird BRT format, expected empty string but got: " + unkString);
 		}
 
-		const brtInstanceGuid = utilFunctions.readGUID(fileReader.readBytes(16)); // Each byte section is in reversed order, need to fix later
+		const brtInstanceGuid = utilFunctions.readGUID(fileReader.readBytes(16));
 		brtJson["brtInstanceGuid"] = brtInstanceGuid;
 
 		fileReader.readBytes(16); // Skip 16 bytes
@@ -216,7 +223,296 @@
 		console.log(`BRT resource converted to JSON and saved to ${savePath}.`);
 	}
 
-	const options = ["Convert BRT resource to JSON", "Exit program"]; 
+	function writeStringTable(brtJson, stringOffsetMap)
+	{
+		let stringTableBuffer = Buffer.alloc(0);
+		// Maintain list of strings to write
+		const stringList = [];
+
+		// Add all needed strings to the list
+		stringList.push(brtJson.brtName);
+		stringList.push("");
+
+		brtJson.bundleRefs.forEach(bundleRef => {
+			if(!stringList.includes(bundleRef.Name))
+			{
+				stringList.push(bundleRef.Name);
+			}
+			if(!stringList.includes(bundleRef.Directory))
+			{
+				stringList.push(bundleRef.Directory);
+			}
+		});
+
+		brtJson.assets.forEach(asset => {
+			if(!stringList.includes(asset.Name))
+			{
+				stringList.push(asset.Name);
+			}
+			if(!stringList.includes(asset.Path))
+			{
+				stringList.push(asset.Path);
+			}
+		});
+
+		brtJson.bundles.forEach(bundle => {
+			if(!stringList.includes(bundle.Name))
+			{
+				stringList.push(bundle.Name);
+			}
+		});
+
+		// Write the string table and store the offsets in the string offset map. Strings should be null-terminated.
+		stringList.forEach((string, index) => {
+			const stringBuffer = Buffer.from(string + "\0", 'utf8');
+			stringOffsetMap[string] = BigInt(stringTableBuffer.length + BRT_HEADER_SIZE);
+			stringTableBuffer = Buffer.concat([stringTableBuffer, stringBuffer]);
+		});
+
+		return stringTableBuffer;
+	}
+
+	function writeBundleRefs(brtJson, stringOffsetMap, bundlesOffset)
+	{
+		let bundleRefsBuffer = Buffer.alloc(0);
+
+		brtJson.bundleRefs.forEach(bundleRef => {
+			const bundleRefBuffer = Buffer.alloc(BRT_BUNDLE_REF_SIZE);
+
+			// Write the name offset
+			bundleRefBuffer.writeBigUInt64LE(stringOffsetMap[bundleRef.Name], 0x0);
+
+			// Write the directory offset
+			bundleRefBuffer.writeBigUInt64LE(stringOffsetMap[bundleRef.Directory], 0x8);
+
+			// Convert the bundle index to a pointer
+			const bundleIndex = bundleRef.BundleIndex;
+			const bundlePtr = bundlesOffset + BigInt(bundleIndex * BRT_BUNDLE_SIZE);
+
+			// Write the bundle pointer
+			bundleRefBuffer.writeBigUInt64LE(bundlePtr, 0x10);
+
+			bundleRefsBuffer = Buffer.concat([bundleRefsBuffer, bundleRefBuffer]);
+		});
+
+		return bundleRefsBuffer;
+	}
+
+	function writeAssets(brtJson, stringOffsetMap)
+	{
+		let assetsBuffer = Buffer.alloc(0);
+
+		brtJson.assets.forEach(asset => {
+			const assetBuffer = Buffer.alloc(BRT_ASSET_SIZE);
+
+			// Write the name offset
+			assetBuffer.writeBigUInt64LE(stringOffsetMap[asset.Name], 0x0);
+
+			// Write the path offset
+			assetBuffer.writeBigUInt64LE(stringOffsetMap[asset.Path], 0x8);
+
+			assetsBuffer = Buffer.concat([assetsBuffer, assetBuffer]);
+		});
+
+		return assetsBuffer;
+	}
+
+	function writeAssetLookups(brtJson)
+	{
+		let assetLookupsBuffer = Buffer.alloc(0);
+
+		brtJson.assetLookups.forEach(assetLookup => {
+			const assetLookupBuffer = Buffer.alloc(BRT_ASSET_LOOKUP_SIZE);
+
+			// Write the hash
+			const hash = BigInt("0x" + assetLookup.HexHash);
+			assetLookupBuffer.writeBigUInt64BE(hash, 0x0); // BE because the bytes are already in LE, so writing it LE would reverse it
+
+			// Write the bundle ref index
+			assetLookupBuffer.writeUInt32LE(assetLookup.BundleRefIndex, 0x8);
+
+			// Write the asset index
+			assetLookupBuffer.writeUInt32LE(assetLookup.AssetIndex, 0xC);
+
+			assetLookupsBuffer = Buffer.concat([assetLookupsBuffer, assetLookupBuffer]);
+		});
+
+		return assetLookupsBuffer;
+	}
+
+	function writeBundles(brtJson, stringOffsetMap, bundlesOffset)
+	{
+		let bundlesBuffer = Buffer.alloc(0);
+
+		brtJson.bundles.forEach(bundle => {
+			const bundleBuffer = Buffer.alloc(BRT_BUNDLE_SIZE);
+
+			// Write the name offset
+			bundleBuffer.writeBigUInt64LE(stringOffsetMap[bundle.Name], 0x0);
+
+			// Convert the parent bundle index to a pointer
+			const parentBundleIndex = bundle.ParentBundleIndex;
+			const parentBundlePtr = bundlesOffset + BigInt(parentBundleIndex * BRT_BUNDLE_SIZE);
+
+			// Write the parent bundle pointer
+			bundleBuffer.writeBigUInt64LE(parentBundlePtr, 0x8);
+
+			bundlesBuffer = Buffer.concat([bundlesBuffer, bundleBuffer]);
+		});
+
+		return bundlesBuffer;
+	}
+
+	function writeRelocTable(brtJson, bundleRefsPtr, assetsPtr, bundlesPtr)
+	{
+		const pointerLocations = [0x00, 0x08, 0x10, 0x18, 0x20, 0x28];
+
+		for(let i = 0; i < brtJson.bundleRefCount; i++)
+		{
+			// Write the pointer to every pointer in bundle refs
+			pointerLocations.push(bundleRefsPtr + BigInt(i * BRT_BUNDLE_REF_SIZE)); // Name
+			pointerLocations.push(bundleRefsPtr + BigInt(i * BRT_BUNDLE_REF_SIZE) + BigInt(0x8)); // Directory
+			pointerLocations.push(bundleRefsPtr + BigInt(i * BRT_BUNDLE_REF_SIZE) + BigInt(0x10)); // Bundle
+		}
+
+		for(let i = 0; i < brtJson.assetCount; i++)
+		{
+			// Write the pointer to every pointer in assets
+			pointerLocations.push(assetsPtr + BigInt(i * BRT_ASSET_SIZE)); // Name
+			pointerLocations.push(assetsPtr + BigInt(i * BRT_ASSET_SIZE) + BigInt(0x8)); // Path
+		}
+
+		for(let i = 0; i < brtJson.bundles.length; i++)
+		{
+			// Write the pointer to every pointer in bundles
+			pointerLocations.push(bundlesPtr + BigInt(i * BRT_BUNDLE_SIZE)); // Name
+			pointerLocations.push(bundlesPtr + BigInt(i * BRT_BUNDLE_SIZE) + BigInt(0x8)); // Parent bundle
+		}
+
+		// Convert all BigInts to UInt32s
+		pointerLocations.forEach((location, index) => {
+			pointerLocations[index] = Number(location);
+		});
+
+		const relocTableBuffer = Buffer.alloc(4 * pointerLocations.length);
+
+		pointerLocations.forEach((location, index) => {
+			relocTableBuffer.writeUInt32LE(location, index * 4);
+		});
+
+		return relocTableBuffer;
+
+	}
+
+	// Function to convert JSON to BRT resource
+	function convertJsonToBrt()
+	{
+		// Get the path of the JSON file
+		let path = prompt("Enter the path to the JSON file: ").trim();
+
+		// Check if the file exists
+		if(!fs.existsSync(path))
+		{
+			console.log("File does not exist. Please enter a valid path.");
+			return;
+		}
+
+		// Read the JSON file
+		const brtJson = JSON.parse(fs.readFileSync(path, 'utf8'));
+
+		// Create a new header buffer
+		const headerBuffer = Buffer.alloc(0x10);
+
+		// Create a new BRT header buffer
+		const brtHeaderBuffer = Buffer.alloc(BRT_HEADER_SIZE);
+
+		// Read the GUID string and convert it to a buffer
+		const brtInstanceGuid = utilFunctions.writeGUID(brtJson.brtInstanceGuid);
+		brtInstanceGuid.copy(brtHeaderBuffer, 0x30);
+
+		// Write the asset lookup count, bundle ref count, and asset count
+		brtHeaderBuffer.writeUInt32LE(brtJson.assetLookupCount, 0x50);
+		brtHeaderBuffer.writeUInt32LE(brtJson.bundleRefCount, 0x54);
+		brtHeaderBuffer.writeUInt32LE(brtJson.assetCount, 0x58);
+
+		// Write the unknown hash
+		brtHeaderBuffer.writeUInt32LE(brtJson.unkHash, 0x60);
+
+		// Write the unknown 1 
+		brtHeaderBuffer.writeUInt32LE(1, 0x68);
+
+		// Call function to write the string table and store string offset object
+		let stringOffsetMap = {};
+		let stringTableBuffer = writeStringTable(brtJson, stringOffsetMap);
+
+		// Write the table name offset at the beginning of the BRT header
+		brtHeaderBuffer.writeBigUInt64LE(stringOffsetMap[brtJson.brtName], 0x0);
+
+		// Pad the string table to the nearest 0x10 bytes
+		const stringTablePad = 16 - (stringTableBuffer.length % 0x10);
+		const padBuffer = Buffer.alloc(stringTablePad);
+		stringTableBuffer = Buffer.concat([stringTableBuffer, padBuffer]);
+
+		// Now that we know the size of the string table, we can calculate all the other header offsets and the reloc table size
+		const bundleRefsPtr = BigInt(BRT_HEADER_SIZE + stringTableBuffer.length);
+		const assetsPtr = bundleRefsPtr + BigInt(BRT_BUNDLE_REF_SIZE * brtJson.bundleRefCount);
+		const assetLookupsPtr = assetsPtr + BigInt(BRT_ASSET_SIZE * brtJson.assetCount);
+		const bundlesPtr = assetLookupsPtr + BigInt(BRT_ASSET_LOOKUP_SIZE * brtJson.assetLookupCount);
+		const emptyStringPtr = stringOffsetMap[""];
+
+		const relocTableSize = 4 * ((2 * brtJson.bundles.length) + (3 * brtJson.bundleRefCount) + (2 * brtJson.assetCount) + 6);
+
+		// Write the various pointers and sizes to their correct buffers and locations
+		headerBuffer.writeUInt32LE(relocTableSize, 0x4);
+		brtHeaderBuffer.writeBigUInt64LE(assetLookupsPtr, 0x08);
+		brtHeaderBuffer.writeBigUInt64LE(bundleRefsPtr, 0x10);
+		brtHeaderBuffer.writeBigUInt64LE(assetsPtr, 0x18);
+		brtHeaderBuffer.writeBigUInt64LE(bundlesPtr, 0x20);
+		brtHeaderBuffer.writeBigUInt64LE(emptyStringPtr, 0x28);
+
+		// Write the bundlerefs section
+		let bundleRefsBuffer = writeBundleRefs(brtJson, stringOffsetMap, bundlesPtr);
+
+		// Write the assets section
+		let assetsBuffer = writeAssets(brtJson, stringOffsetMap);
+
+		// Write the asset lookups section
+		let assetLookupsBuffer = writeAssetLookups(brtJson);
+
+		// Write the bundles section
+		let bundlesBuffer = writeBundles(brtJson, stringOffsetMap, bundlesPtr);
+
+		// We can now write the BRT section length to the header
+		let brtSectionLength = BRT_HEADER_SIZE + stringTableBuffer.length + bundleRefsBuffer.length + assetsBuffer.length + assetLookupsBuffer.length + bundlesBuffer.length;
+		headerBuffer.writeUInt32LE(brtSectionLength, 0x0);
+
+		// Write the reloc table
+		const relocTableBuffer = writeRelocTable(brtJson, bundleRefsPtr, assetsPtr, bundlesPtr);
+
+
+		const finalBrtBuffer = Buffer.concat([headerBuffer, brtHeaderBuffer, stringTableBuffer, bundleRefsBuffer, assetsBuffer, assetLookupsBuffer, bundlesBuffer, relocTableBuffer]);
+
+		console.log("Enter a path to save the BRT file, or nothing to use the same path as the JSON file: ");
+		let savePath = prompt().trim();
+
+		if(savePath === "")
+		{
+			// Trim the extension if it exists
+			if(path.endsWith(".json"))
+			{
+				savePath = path.substring(0, path.length - 5);
+			}
+
+			savePath += ".res";
+		}
+
+		fs.writeFileSync(savePath, finalBrtBuffer);
+
+		console.log(`JSON converted to BRT resource and saved to ${savePath}.`);
+
+	}
+
+	const options = ["Convert BRT resource to JSON", "Convert JSON to BRT resource", "Exit program"]; 
 
 	// Main program logic
 	console.log(`Welcome to BRT Tools ${VERSION_STRING}! This program will help you convert BundleRefTable files.\n`);
@@ -243,6 +539,10 @@
 			await convertBrtToJson();
 		}
 		else if(option === 2)
+		{
+			await convertJsonToBrt();
+		}
+		else if(option === 3)
 		{
 			break;
 		}
