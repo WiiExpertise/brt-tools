@@ -7,6 +7,7 @@ This tool allows for reading, writing, and converting BundleRefTable resources f
 
 ## Supported Games
 - Madden NFL 25 (BRT <-> JSON)
+- EA SPORTS FC 24 (BRT <-> JSON)
 
 ## To Do List
 - Add support for different BRT format versions
