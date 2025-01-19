@@ -6,14 +6,31 @@
 	const { FileParser } = require('./utils/FileParser');
 
 	// Version number constant
-	const VERSION_STRING = "vDEV";
+	const VERSION_STRING = "v0.2";
 
 	// Global constants
-	const BRT_HEADER_SIZE = 0x70;
+	let BRT_HEADER_SIZE = 0x70; // Not constant due to format variations
 	const BRT_BUNDLE_REF_SIZE = 0x18;
 	const BRT_ASSET_SIZE = 0x10;
 	const BRT_ASSET_LOOKUP_SIZE = 0x10;
 	const BRT_BUNDLE_SIZE = 0x10;
+
+	const BRT_FORMATS = {
+		BRT_NO_GUID: 0,
+		BRT_GUID: 1,
+		BRT_COMPRESSED_STRINGS: 2
+	}
+
+	// We currently don't support these formats (not enough information on them)
+	const unsupportedFormats = [BRT_FORMATS.BRT_COMPRESSED_STRINGS];
+
+	const GAME_FORMATS = {
+		"Madden NFL 24": BRT_FORMATS.BRT_NO_GUID,
+		"Madden NFL 25": BRT_FORMATS.BRT_GUID,
+		"EA SPORTS FC 24": BRT_FORMATS.BRT_GUID,
+		"EA SPORTS FC 25": BRT_FORMATS.BRT_COMPRESSED_STRINGS,
+		"Dragon Age: The Veilguard": BRT_FORMATS.BRT_NO_GUID
+	}
 
 	// Global variables
 	let assetLookupsPtr;
@@ -149,6 +166,15 @@
 
 		let brtJson = {};
 
+		// Get the BRT format from the user, so we can read the file correctly, as different games have slightly different formats
+		const brtFormat = getBrtFormat();
+
+		if(unsupportedFormats.includes(brtFormat))
+		{
+			console.log("Unsupported BRT format. Aborting.");
+			return;
+		}
+
 		// Read the file
 		const resourceData = fs.readFileSync(path).subarray(0x10);
 		const fileReader = new FileParser(resourceData);
@@ -157,6 +183,7 @@
 		const brtName = fileReader.readNullTerminatedString(brtNamePtr);
 
 		brtJson["brtName"] = brtName;
+		brtJson["brtFormat"] = brtFormat;
 
 		//console.log(`BundleRefTable name: ${brtName}`);
 		//console.log(`Current offset: ${fileReader.offset}`);
@@ -174,10 +201,12 @@
 			console.log("Weird BRT format, expected empty string but got: " + unkString);
 		}
 
-		const brtInstanceGuid = utilFunctions.readGUID(fileReader.readBytes(16));
-		brtJson["brtInstanceGuid"] = brtInstanceGuid;
-
-		fileReader.readBytes(16); // Skip 16 bytes
+		if(brtFormat === BRT_FORMATS.BRT_GUID)
+		{
+			const brtInstanceGuid = utilFunctions.readGUID(fileReader.readBytes(16));
+			brtJson["brtInstanceGuid"] = brtInstanceGuid;
+			fileReader.readBytes(16); // Skip 16 bytes
+		}
 
 		const assetLookupCount = fileReader.readBytes(4).readUInt32LE(0);
 		const bundleRefCount = fileReader.readBytes(4).readUInt32LE(0);
@@ -221,6 +250,29 @@
 		fs.writeFileSync(savePath, JSON.stringify(brtJson, null, 4));
 
 		console.log(`BRT resource converted to JSON and saved to ${savePath}.`);
+	}
+
+	function getBrtFormat()
+	{
+		console.log("\nSupported Games: ");
+		Object.keys(GAME_FORMATS).forEach((game, index) => {
+			console.log(`${index}: ${game}`);
+		});
+
+		console.log("\nEnter the number of the game you'd like to select: ");
+		let gameIndex;
+		do
+		{
+			gameIndex = parseInt(prompt().trim());
+			
+			if(gameIndex < 0 || gameIndex >= Object.keys(GAME_FORMATS).length || Number.isNaN(gameIndex))
+			{
+				console.log("Invalid selection. Please try again.");
+			}
+		}
+		while(gameIndex < 0 || gameIndex >= Object.keys(GAME_FORMATS).length || Number.isNaN(gameIndex));
+
+		return GAME_FORMATS[Object.keys(GAME_FORMATS)[gameIndex]];
 	}
 
 	function writeStringTable(brtJson, stringOffsetMap)
@@ -420,26 +472,42 @@
 		// Read the JSON file
 		const brtJson = JSON.parse(fs.readFileSync(path, 'utf8'));
 
+		// Get the BRT format from the file if present, otherwise ask the user
+		const brtFormat = brtJson.hasOwnProperty("brtFormat") ? brtJson.brtFormat : getBrtFormat();
+
+		if(unsupportedFormats.includes(brtFormat))
+		{
+			console.log("Unsupported BRT format. Aborting.");
+			return;
+		}
+
+		// Set the correct header size based on the format
+		BRT_HEADER_SIZE = brtFormat === BRT_FORMATS.BRT_GUID ? 0x70 : 0x50;
+
 		// Create a new header buffer
 		const headerBuffer = Buffer.alloc(0x10);
 
 		// Create a new BRT header buffer
 		const brtHeaderBuffer = Buffer.alloc(BRT_HEADER_SIZE);
 
-		// Read the GUID string and convert it to a buffer
-		const brtInstanceGuid = utilFunctions.writeGUID(brtJson.brtInstanceGuid);
-		brtInstanceGuid.copy(brtHeaderBuffer, 0x30);
+
+		if(brtFormat === BRT_FORMATS.BRT_GUID)
+		{
+			// Read the GUID string and convert it to a buffer
+			const brtInstanceGuid = utilFunctions.writeGUID(brtJson.brtInstanceGuid);
+			brtInstanceGuid.copy(brtHeaderBuffer, 0x30);
+		}
 
 		// Write the asset lookup count, bundle ref count, and asset count
-		brtHeaderBuffer.writeUInt32LE(brtJson.assetLookupCount, 0x50);
-		brtHeaderBuffer.writeUInt32LE(brtJson.bundleRefCount, 0x54);
-		brtHeaderBuffer.writeUInt32LE(brtJson.assetCount, 0x58);
+		brtHeaderBuffer.writeUInt32LE(brtJson.assetLookupCount, BRT_HEADER_SIZE - 0x20);
+		brtHeaderBuffer.writeUInt32LE(brtJson.bundleRefCount, BRT_HEADER_SIZE - 0x16);
+		brtHeaderBuffer.writeUInt32LE(brtJson.assetCount, BRT_HEADER_SIZE - 0x12);
 
 		// Write the unknown hash
-		brtHeaderBuffer.writeUInt32LE(brtJson.unkHash, 0x60);
+		brtHeaderBuffer.writeUInt32LE(brtJson.unkHash, BRT_HEADER_SIZE - 0x10);
 
 		// Write the unknown 1 
-		brtHeaderBuffer.writeUInt32LE(1, 0x68);
+		brtHeaderBuffer.writeUInt32LE(1, BRT_HEADER_SIZE - 0x08);
 
 		// Call function to write the string table and store string offset object
 		let stringOffsetMap = {};
