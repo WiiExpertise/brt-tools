@@ -1,16 +1,19 @@
 # BRT (Bundle Ref Table) Tools
-This tool allows for reading, writing, and converting BundleRefTable resources from EA's Frostbite game engine to a JSON format
+This tool allows for reading, writing, and converting BundleRefTable resources from EA's Frostbite game engine to and from a JSON format
 
 ## Supported Functionality
 - Convert BRT .res file to .json
 - Convert .json file to BRT .res file
 
-## Supported Games
-- Madden NFL 25 (BRT <-> JSON)
-- EA SPORTS FC 24 (BRT <-> JSON)
+## Currently Supported Games (full support unless otherwise noted)
+- Madden NFL 24
+- Madden NFL 25
+- EA SPORTS FC 24
+- Dragon Age: The Veilguard
 
-## To Do List
-- Add support for different BRT format versions
+## Adding New Games
+- Before a game can be added to the supported games list, it must be tested. To do this, take a BRT resource from the game, convert it to JSON, and then convert the JSON back to BRT resource without any modifications. Then, attempt to use the converted resource in the game and see if it still works as expected.
+- Open a new issue with your findings. Include what game(s) you have tested. Please include a copy of the original BRT resource from the game(s), especially if it does not work.
 
 ## Usage
 1. Download the latest executable from [releases](https://github.com/WiiExpertise/brt-tools/releases/latest)
