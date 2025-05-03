@@ -4,9 +4,10 @@
 	const prompt = require('prompt-sync')();
 	const utilFunctions = require('./utils/UtilFunctions');
 	const { FileParser } = require('./utils/FileParser');
+	const brtManager = require('./utils/BrtManager');
 
 	// Version number constant
-	const VERSION_STRING = "v0.2";
+	const VERSION_STRING = "v1.0";
 
 	// Global constants
 	let BRT_HEADER_SIZE = 0x70; // Not constant due to format variations
@@ -22,8 +23,11 @@
 	}
 
 	// We currently don't support these formats (not enough information on them)
-	const unsupportedFormats = [BRT_FORMATS.BRT_COMPRESSED_STRINGS];
+	const unsupportedFormats = [
+		BRT_FORMATS.BRT_COMPRESSED_STRINGS
+	];
 
+	// BRT format mapping for different games
 	const GAME_FORMATS = {
 		"Madden NFL 24": BRT_FORMATS.BRT_NO_GUID,
 		"Madden NFL 25": BRT_FORMATS.BRT_GUID,
@@ -108,7 +112,7 @@
 			const assetLookup = {};
 
 			const rawHash = fileReader.readBytes(8);
-			const hash = BigInt(rawHash.readBigInt64LE(0));
+			const hash = BigInt(rawHash.readBigUInt64LE(0));
 
 			// Convert rawHash to hex string
 			const hexHash = rawHash.toString('hex');
@@ -135,7 +139,7 @@
 		for(let i = 0; i < bundleCount; i++)
 		{
 			const bundle = {};
-			
+
 			const namePtr = parseInt(fileReader.readBytes(8).readBigUInt64LE(0));
 			const name = fileReader.readNullTerminatedString(namePtr);
 
@@ -373,6 +377,13 @@
 	{
 		let assetLookupsBuffer = Buffer.alloc(0);
 
+		// Sort the asset lookups in ascending hash order (treat the hash as an unsigned long, in little endian format)
+		brtJson.assetLookups.sort((a, b) => {
+			const hashA = BigInt(a.Hash);
+			const hashB = BigInt(b.Hash);
+			return hashA < hashB ? -1 : (hashA > hashB ? 1 : 0);
+		});
+
 		brtJson.assetLookups.forEach(assetLookup => {
 			const assetLookupBuffer = Buffer.alloc(BRT_ASSET_LOOKUP_SIZE);
 
@@ -500,8 +511,8 @@
 
 		// Write the asset lookup count, bundle ref count, and asset count
 		brtHeaderBuffer.writeUInt32LE(brtJson.assetLookupCount, BRT_HEADER_SIZE - 0x20);
-		brtHeaderBuffer.writeUInt32LE(brtJson.bundleRefCount, BRT_HEADER_SIZE - 0x16);
-		brtHeaderBuffer.writeUInt32LE(brtJson.assetCount, BRT_HEADER_SIZE - 0x12);
+		brtHeaderBuffer.writeUInt32LE(brtJson.bundleRefCount, BRT_HEADER_SIZE - 0x1C);
+		brtHeaderBuffer.writeUInt32LE(brtJson.assetCount, BRT_HEADER_SIZE - 0x18);
 
 		// Write the unknown hash
 		brtHeaderBuffer.writeUInt32LE(brtJson.unkHash, BRT_HEADER_SIZE - 0x10);
@@ -580,7 +591,7 @@
 
 	}
 
-	const options = ["Convert BRT resource to JSON", "Convert JSON to BRT resource", "Exit program"]; 
+	const options = ["Convert BRT resource to JSON", "Convert JSON to BRT resource", "Import duplication spreadsheet into BRT JSON", "Exit program"]; 
 
 	// Main program logic
 	console.log(`Welcome to BRT Tools ${VERSION_STRING}! This program will help you convert BundleRefTable files.\n`);
@@ -611,6 +622,10 @@
 			await convertJsonToBrt();
 		}
 		else if(option === 3)
+		{
+			brtManager.importDuplicationSheet();
+		}
+		else if(option === 4)
 		{
 			break;
 		}
