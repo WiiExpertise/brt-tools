@@ -1,9 +1,14 @@
 # BRT (Bundle Ref Table) Tools
-This tool allows for reading, writing, and converting BundleRefTable resources from EA's Frostbite game engine to and from a JSON format
+This tool allows for reading, writing, and converting BundleRefTable resources from EA's Frostbite game engine to and from a JSON format.
+
+BundleRefTable (BRT) resources are used in various Frostbite games (mostly EA Sports titles) to lookup game assets based on an assetname string. The resource contains a list of assets, a list of bundles, and a list of lookups. Each lookup contains a hash (corresponding to the hash of the assetname string it corresponds to), an asset index pointing to the asset in the asset list, and a bundle index pointing to the bundle that contains the asset. This allows the game to lookup a given assetname and know which bundle must be loaded to load the asset.
+
+This means in order to add new assets for modding, they must be added to the BRT resource. This tool greatly simplifies this process by converting the messy binary resource format into a JSON format that can be easily edited and then converting it back to the resource format so that it can be imported into the game. 
 
 ## Supported Functionality
 - Convert BRT .res file to .json
 - Convert .json file to BRT .res file
+- Add entries for duplicated assets to a BRT JSON file using a provided Excel file
 
 ## Currently Supported Games (full support unless otherwise noted)
 - Madden NFL 24
@@ -18,6 +23,15 @@ This tool allows for reading, writing, and converting BundleRefTable resources f
 ## Usage
 1. Download the latest executable from [releases](https://github.com/WiiExpertise/brt-tools/releases/latest)
 2. Run the executable and follow the included prompts
+
+## Excel File For Adding Asset Entries
+The option to add entries for duplicated assets based on an Excel file requires an Excel file formatted with the first column containing the path to each duplicated asset, while the second column contains the path to the corresponding original asset. It should also include the appropriate column headers. For example:
+### Spreadsheet
+| Dupe | Original |
+| ---- | ------- |
+| content/my_new_asset | content/asset |
+| ... | ... |
+| ... | ... |
 
 ## Building
 1. Clone the repository:
