@@ -35,7 +35,31 @@ function writeGUID(guidStr)
     return guidBuffer;
 }
 
+function fnv64HashString(data, charCase = 'kCharCaseAny', initialValue = BigInt("14695981039346656037")) {
+    const FNV_PRIME = BigInt("1099511628211");
+    const MODULUS = BigInt("2") ** BigInt("64");
+    
+    let hash = BigInt(initialValue);
+    
+    for (let c of data) {
+        let charCode;
+        if (charCase === 'kCharCaseAny') {
+            charCode = c.charCodeAt(0);
+        } else if (charCase === 'kCharCaseLower') {
+            charCode = c.toLowerCase().charCodeAt(0);
+        } else if (charCase === 'kCharCaseUpper') {
+            charCode = c.toUpperCase().charCodeAt(0);
+        }
+        
+        hash = (hash * FNV_PRIME) ^ BigInt(charCode);
+        hash %= MODULUS;
+    }
+    
+    return hash;
+}
+
 module.exports = {
     readGUID,
-    writeGUID
+    writeGUID,
+    fnv64HashString
 };
