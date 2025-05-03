@@ -3,4 +3,5 @@ node_modules/
 .vs/
 *.res
 *.cs
+*.py
 *.hexpat
