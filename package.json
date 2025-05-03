@@ -19,6 +19,7 @@
   "dependencies": {
     "bit-buffer": "^0.2.5",
     "esbuild": "^0.24.2",
-    "prompt-sync": "^4.2.0"
+    "prompt-sync": "^4.2.0",
+    "xlsx": "^0.18.5"
   }
 }
