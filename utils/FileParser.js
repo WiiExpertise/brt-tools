@@ -51,6 +51,23 @@ class FileParser
         return string;
     }
 
+    readSizedString(length)
+    {
+        // Read the string, skipping any null bytes
+        const bytes = this.readBytes(length);
+        let string = "";
+        for(let i = 0; i < bytes.length; i++)
+        {
+            if(bytes[i] !== 0)
+            {
+                string += String.fromCharCode(bytes[i]);
+            }
+        }
+
+        // Return the string
+        return string;
+    }
+
     pad(alignment)
 	{
 		while(this._offset % alignment !== 0)

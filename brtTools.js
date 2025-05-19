@@ -7,7 +7,7 @@
 	const brtManager = require('./utils/BrtManager');
 
 	// Version number constant
-	const VERSION_STRING = "v1.0";
+	const VERSION_STRING = "v1.2 DEV";
 
 	// Global constants
 	let BRT_HEADER_SIZE = 0x70; // Not constant due to format variations
@@ -22,9 +22,13 @@
 		BRT_COMPRESSED_STRINGS: 2
 	}
 
-	// We currently don't support these formats (not enough information on them)
-	const unsupportedFormats = [
-		BRT_FORMATS.BRT_COMPRESSED_STRINGS
+	// We currently don't support these formats (for reading and/or writing respectively)
+	const unsupportedReadFormats = [
+		//BRT_FORMATS.BRT_COMPRESSED_STRINGS
+	];
+
+	const unsupportedWriteFormats = [
+		//BRT_FORMATS.BRT_COMPRESSED_STRINGS
 	];
 
 	// BRT format mapping for different games
@@ -41,6 +45,7 @@
 	let bundleRefsPtr;
 	let assetsPtr;
 	let bundlesPtr;
+	let stringTablePtr;
 	let bundleCount = 0;
 
 	function readBundleRefs(fileReader, brtJson)
@@ -155,6 +160,258 @@
 		brtJson["bundles"] = bundles;
 	}
 
+	function readCompressedStringBrt(path, brtJson)
+	{
+		// Read the file
+		const resourceData = fs.readFileSync(path).subarray(0x10);
+		const fileReader = new FileParser(resourceData);
+
+		const brtNamePtr = parseInt(fileReader.readBytes(8).readBigUInt64LE(0));
+		const brtName = fileReader.readNullTerminatedString(brtNamePtr);
+
+		brtJson["brtName"] = brtName;
+
+		assetLookupsPtr = parseInt(fileReader.readBytes(8).readBigUInt64LE(0));
+		stringTablePtr = parseInt(fileReader.readBytes(8).readBigUInt64LE(0));
+		bundleRefsPtr = parseInt(fileReader.readBytes(8).readBigUInt64LE(0));
+
+		const unkStringPtr = parseInt(fileReader.readBytes(8).readBigUInt64LE(0));
+		const unkString = fileReader.readNullTerminatedString(unkStringPtr);
+
+		if(unkString !== "")
+		{
+			console.log("Weird BRT format, expected empty string but got: " + unkString);
+		}
+
+		const brtInstanceGuid = utilFunctions.readGUID(fileReader.readBytes(16));
+		brtJson["brtInstanceGuid"] = brtInstanceGuid;
+		fileReader.readBytes(16); // Skip 16 bytes
+
+		const assetLookupCount = fileReader.readBytes(4).readUInt32LE(0);
+		const bundleRefCount = fileReader.readBytes(4).readUInt32LE(0);
+		const stringCount = fileReader.readBytes(4).readUInt32LE(0);
+
+		const unkZero1 = fileReader.readBytes(4).readUInt32LE(0);
+
+		const unkHash = fileReader.readBytes(4).readUInt32LE(0);
+
+		const unkZero2 = fileReader.readBytes(4).readUInt32LE(0);
+		const unkOne = fileReader.readBytes(4).readUInt32LE(0);
+		const unkZero3 = fileReader.readBytes(4).readUInt32LE(0);
+
+		brtJson["assetLookupCount"] = assetLookupCount;
+		brtJson["bundleRefCount"] = bundleRefCount;
+		brtJson["stringCount"] = stringCount;
+		brtJson["unkHash"] = unkHash;
+
+		const stringMap = {};
+
+		readNewBundleRefs(fileReader, brtJson, stringMap);
+
+		//console.log(stringMap);
+
+		readNewAssetLookups(fileReader, brtJson, stringMap);
+
+		console.log("Enter a path to save the JSON file, or nothing to use the same path as the BRT file: ");
+		let savePath = prompt().trim();
+
+		if(savePath === "")
+		{
+			// Trim the extension if it exists
+			if(path.endsWith(".res"))
+			{
+				savePath = path.substring(0, path.length - 4);
+			}
+
+			savePath += ".json";
+		}
+
+		fs.writeFileSync(savePath, JSON.stringify(brtJson, null, 4));
+
+		console.log(`BRT resource converted to JSON and saved to ${savePath}.`);
+	}
+
+	function readNewAssetLookups(fileReader, brtJson, stringMap)
+	{
+		fileReader.offset = assetLookupsPtr;
+
+		const assetLookups = [];
+
+		for(let i = 0; i < brtJson.assetLookupCount; i++)
+		{
+			//console.log("Reading asset lookup " + i + " at offset " + fileReader.offset.toString(16));
+			
+			const assetLookup = {};
+
+			const rawHash = fileReader.readBytes(8);
+			const hash = BigInt(rawHash.readBigUInt64LE(0));
+
+			// Convert rawHash to hex string
+			const hexHash = rawHash.toString('hex');
+			const bundleRefIndex = fileReader.readBytes(4).readUInt32LE(0);
+			
+			const pathStringRefInfo = readStringRef(fileReader);
+			let assetPath;
+			if(pathStringRefInfo.stringOffset === -1)
+			{
+				assetPath = "";
+			}
+			else
+			{
+				assetPath = readCompressedString(fileReader, pathStringRefInfo, stringMap);
+			}
+
+			assetLookup["Hash"] = hash.toString();
+			assetLookup["HexHash"] = hexHash;
+			assetLookup["BundleRefIndex"] = bundleRefIndex;
+			assetLookup["AssetPath"] = assetPath;
+
+			assetLookups.push(assetLookup);
+		}
+
+		brtJson["assetLookups"] = assetLookups;
+	}
+
+	function readNewBundleRefs(fileReader, brtJson, stringMap)
+	{
+		fileReader.offset = bundleRefsPtr;
+
+		const bundleRefs = [];
+
+		for(let i = 0; i < brtJson.bundleRefCount; i++)
+		{
+			//console.log("Reading bundle ref " + i + " at offset " + fileReader.offset.toString(16));
+			
+			const bundleRef = {};
+
+			const pathStringRefInfo = readStringRef(fileReader);
+			const parentBundleIndex = fileReader.readBytes(4).readInt32LE(0);
+
+			let path;
+
+			if(pathStringRefInfo.stringOffset === -1)
+			{
+				path = "";
+			}
+			else
+			{
+				path = readCompressedString(fileReader, pathStringRefInfo, stringMap);
+			}
+			
+			bundleRef.Path = path;
+			bundleRef.ParentBundleIndex = parentBundleIndex;
+
+			bundleRefs.push(bundleRef);
+		}
+
+		brtJson["bundleRefs"] = bundleRefs;
+	}
+
+	function readStringRef(fileReader, signed = true)
+	{
+		const stringOffset = fileReader.readBytes(2).readInt16LE(0);
+		const identifier = fileReader.readBytes(1).readUInt8(0);
+		const length = fileReader.readBytes(1).readUInt8(0);
+
+		const stringReFInfo = {};
+		stringReFInfo["stringOffset"] = stringOffset;
+		stringReFInfo["identifier"] = identifier;
+		stringReFInfo["strLength"] = length;
+
+		return stringReFInfo;
+	}
+
+	function readCompressedString(fileReader, stringRefInfo, stringMap)
+	{
+		const origOffset = fileReader.offset;
+
+		const stringAddress = stringTablePtr + stringRefInfo.stringOffset;
+
+		fileReader.offset = stringAddress;
+
+		const baseStringRef = readStringRef(fileReader, true);
+
+		let currString;
+
+		console.log("Identifier " + stringRefInfo.identifier.toString(16) + " for string at offset " + fileReader.offset.toString(16));
+
+		if(stringRefInfo.identifier === 128 || stringRefInfo.identifier - 1 === 128)
+		{
+			console.log("Reading at offset " + fileReader.offset.toString(16));
+			currString = fileReader.readSizedString(stringRefInfo.strLength);
+		}
+		else if(stringRefInfo.identifier === 0 || stringRefInfo.identifier - 1 === 0)
+		{
+			console.log("StringRef identifier is 0 reading string at offset " + stringAddress.toString(16) + " current offset " + fileReader.offset.toString(16));
+			const additionalOffset = fileReader.readBytes(4).readUInt32LE(0);
+			fileReader.offset = stringTablePtr + additionalOffset;
+			console.log("Reading at offset " + fileReader.offset.toString(16));
+			currString = fileReader.readSizedString(stringRefInfo.strLength);
+		}
+		else
+		{
+			console.log("Reading at offset " + fileReader.offset.toString(16));
+			currString = fileReader.readSizedString(stringRefInfo.strLength);
+		}
+
+		//console.log(baseStringRef);
+
+		if(baseStringRef.stringOffset !== -1)
+		{
+			fileReader.offset = stringTablePtr + baseStringRef.stringOffset + 4; // Skip the previous base string ref
+
+			let baseString = "";
+			if(baseStringRef.identifier === 0 || baseStringRef.identifier - 1 === 0)
+			{
+				fileReader.offset = stringTablePtr + fileReader.readBytes(4).readUInt32LE(0);
+				baseString = fileReader.readSizedString(baseStringRef.strLength);
+			}
+			else
+			{
+				baseString = fileReader.readSizedString(baseStringRef.strLength);
+			}
+			//console.log("Base string: " + baseString + " at offset " + fileReader.offset.toString(16));
+			
+			const baseFinalString = readCompressedString(fileReader, baseStringRef, stringMap);
+			console.log("Base string: " + baseString);
+			console.log("Base final string: " + baseFinalString);
+			console.log("Current string: " + currString);
+			console.log("Base string ref length: " + baseStringRef.strLength);
+
+			// Find where baseString occurs in baseFinalString
+			let baseStringIndex = baseFinalString.lastIndexOf(baseString);
+
+			if(baseStringIndex === -1)
+			{
+				//console.log("Base string: " + baseString);
+				//console.log("Base final string: " + baseFinalString);
+				//console.log("Base string ref length: " + baseStringRef.strLength);
+			}
+
+			if(baseString === "")
+			{
+				//console.log("Base string is empty at offset " + fileReader.offset.toString(16));
+			}
+
+			console.log("new components:");
+			console.log(baseFinalString.substring(0, baseStringIndex));
+			console.log(baseString.substring(0, baseStringRef.strLength));
+			console.log(currString);
+
+			// Take everything before baseString from baseFinalString, then take baseStringRef.length from baseString
+			currString = baseFinalString.substring(0, baseStringIndex) + baseString.substring(0, baseStringRef.strLength) + currString;
+
+			console.log("Final string: " + currString);
+		}
+
+		stringMap[stringAddress] = currString;
+		fileReader.offset = origOffset;
+
+		//console.log(stringMap);
+
+		return currString;
+	}
+
 	// Function to convert BRT resource to JSON
 	async function convertBrtToJson()
 	{
@@ -173,11 +430,19 @@
 		// Get the BRT format from the user, so we can read the file correctly, as different games have slightly different formats
 		const brtFormat = getBrtFormat();
 
-		if(unsupportedFormats.includes(brtFormat))
+		if(unsupportedReadFormats.includes(brtFormat))
 		{
 			console.log("Unsupported BRT format. Aborting.");
 			return;
 		}
+
+		if(brtFormat === BRT_FORMATS.BRT_COMPRESSED_STRINGS)
+		{
+			brtJson["brtFormat"] = brtFormat;
+			readCompressedStringBrt(path, brtJson);
+			return;
+		}
+
 
 		// Read the file
 		const resourceData = fs.readFileSync(path).subarray(0x10);
@@ -467,6 +732,266 @@
 
 	}
 
+	function writeCompressedStringBrt(brtJson)
+	{
+		const COMPRESSED_STRING_HEADER_SIZE = 0x70;
+		
+		let brtBuf = Buffer.alloc(0);
+
+		// Create a new header buffer
+		const headerBuffer = Buffer.alloc(0x10);
+
+		// Create a new BRT header buffer
+		let brtHeaderBuffer = Buffer.alloc(COMPRESSED_STRING_HEADER_SIZE);
+
+		// Name offset is always right after the header
+		const nameOffset = COMPRESSED_STRING_HEADER_SIZE;
+		const emptyStringOffset = nameOffset + brtJson.brtName.length + 1;
+		brtHeaderBuffer.writeBigUInt64LE(BigInt(nameOffset), 0x0);
+		brtHeaderBuffer.writeBigUInt64LE(BigInt(emptyStringOffset), 0x20);
+
+		// Create a new buffer with the BRT name null-terminated plus an extra empty string
+		const brtNameBuffer = Buffer.from(brtJson.brtName + "\0" + "\0", 'utf8');
+
+		const headerPadBuf = Buffer.alloc(0x10 - (brtNameBuffer.length % 0x10));
+
+		const brtNameWithPad = Buffer.concat([brtNameBuffer, headerPadBuf]);
+
+		// String table comes after the header and name sections
+		const stringTableOffset = COMPRESSED_STRING_HEADER_SIZE + brtNameWithPad.length;
+		brtHeaderBuffer.writeUInt32LE(stringTableOffset, 0x10);
+
+		const stringMap = enumerateCompressedStrings(brtJson);
+
+		const stringCount = Object.keys(stringMap).length;
+
+		const stringTableBuffer = writeCompressedStringTable(stringMap);
+
+		// Write counts
+		brtHeaderBuffer.writeUInt32LE(brtJson.assetLookups.length, 0x48);
+		brtHeaderBuffer.writeUInt32LE(brtJson.bundleRefs.length, 0x4C);
+		brtHeaderBuffer.writeUInt32LE(stringCount, 0x50);
+
+		// Write unknown hash
+		brtHeaderBuffer.writeUInt32LE(brtJson.unkHash, 0x58);
+
+		// Write unknown 1
+		brtHeaderBuffer.writeUInt32LE(1, 0x60);
+
+
+		// Write the GUID
+		const brtInstanceGuid = utilFunctions.writeGUID(brtJson.brtInstanceGuid);
+		brtInstanceGuid.copy(brtHeaderBuffer, 0x28);
+
+		brtHeaderBuffer = Buffer.concat([brtHeaderBuffer, brtNameWithPad]);
+
+		const bundleRefsBuffer = writeNewBundleRefs(brtJson, stringMap);
+		const assetLookupsBuffer = writeNewAssetLookups(brtJson, stringMap);
+
+		const pointerLocations = [0x00, 0x08, 0x10, 0x18, 0x20];
+
+		const relocTableBuffer = Buffer.alloc(4 * pointerLocations.length);
+		for(let i = 0; i < pointerLocations.length; i++)
+		{
+			relocTableBuffer.writeUInt32LE(pointerLocations[i], i * 4);
+		}
+
+		brtHeaderBuffer = Buffer.concat([brtHeaderBuffer, stringTableBuffer]);
+
+		const bundleRefsOffset = brtHeaderBuffer.length;
+
+		brtHeaderBuffer = Buffer.concat([brtHeaderBuffer, bundleRefsBuffer]);
+
+		const assetLookupsOffset = brtHeaderBuffer.length;
+
+		brtHeaderBuffer = Buffer.concat([brtHeaderBuffer, assetLookupsBuffer]);
+
+		const relocTableOffset = brtHeaderBuffer.length;
+
+		brtHeaderBuffer = Buffer.concat([brtHeaderBuffer, relocTableBuffer]);
+
+		brtHeaderBuffer.writeBigUInt64LE(BigInt(assetLookupsOffset), 0x8);
+		brtHeaderBuffer.writeBigUInt64LE(BigInt(bundleRefsOffset), 0x18);
+
+		headerBuffer.writeUInt32LE(relocTableOffset, 0x0);
+		headerBuffer.writeUInt32LE(relocTableBuffer.length, 0x4);
+
+		brtBuf = Buffer.concat([headerBuffer, brtHeaderBuffer]);
+
+		console.log("Enter a path to save the BRT file, or nothing to use the same path as the JSON file: ");
+		let savePath = prompt().trim();
+
+		if(savePath === "")
+		{
+			// Trim the extension if it exists
+			if(path.endsWith(".json"))
+			{
+				savePath = path.substring(0, path.length - 5);
+			}
+
+			savePath += ".res";
+		}
+
+		fs.writeFileSync(savePath, brtBuf);
+
+		console.log(`JSON converted to BRT resource and saved to ${savePath}.`);
+
+	}
+
+	function writeNewBundleRefs(brtJson, stringMap)
+	{
+		let bundleRefsBuffer = Buffer.alloc(0);
+
+		brtJson.bundleRefs.forEach(bundleRef => {
+			const bundleRefBuffer = Buffer.alloc(8);
+
+			if(bundleRef.Path === "")
+			{
+				bundleRefBuffer.writeUInt32LE(0xFFFFFFFF, 0x0);
+				bundleRefBuffer.writeUInt32LE(0xFFFFFFFF, 0x4);
+			}
+			else
+			{
+				bundleRefBuffer.writeInt16LE(stringMap[bundleRef.Path.toLowerCase()]);
+				bundleRefBuffer.writeUInt8(0x80, 0x2);
+				bundleRefBuffer.writeUInt8(bundleRef.Path.length, 0x3);
+
+				bundleRefBuffer.writeInt32LE(bundleRef.ParentBundleIndex, 0x4);
+			}
+
+			bundleRefsBuffer = Buffer.concat([bundleRefsBuffer, bundleRefBuffer]);
+		});
+
+		// Pad the bundle refs to the nearest 0x10 bytes
+		const bundleRefsPad = 16 - (bundleRefsBuffer.length % 0x10);
+		const padBuffer = Buffer.alloc(bundleRefsPad);
+		bundleRefsBuffer = Buffer.concat([bundleRefsBuffer, padBuffer]);
+
+		return bundleRefsBuffer;
+	}
+
+	function writeNewAssetLookups(brtJson, stringMap)
+	{
+		let assetLookupsBuffer = Buffer.alloc(0);
+
+		// Sort the asset lookups in ascending hash order (treat the hash as an unsigned long, in little endian format)
+		brtJson.assetLookups.sort((a, b) => {
+			const hashA = BigInt(a.Hash);
+			const hashB = BigInt(b.Hash);
+			return hashA < hashB ? -1 : (hashA > hashB ? 1 : 0);
+		});
+
+		brtJson.assetLookups.forEach(assetLookup => {
+			const assetLookupBuffer = Buffer.alloc(0x20);
+
+			// Write the hash
+			const hash = BigInt("0x" + assetLookup.HexHash);
+			assetLookupBuffer.writeBigUInt64BE(hash, 0x0); // BE because the bytes are already in LE, so writing it LE would reverse it
+
+			assetLookupBuffer.writeInt32LE(assetLookup.BundleRefIndex, 0x8);
+
+			assetLookupBuffer.writeInt16LE(stringMap[assetLookup.AssetPath.toLowerCase()], 0xC);
+			assetLookupBuffer.writeUInt8(0x80, 0xE);
+			assetLookupBuffer.writeUInt8(assetLookup.AssetPath.length, 0xF);
+
+			assetLookupsBuffer = Buffer.concat([assetLookupsBuffer, assetLookupBuffer]);
+		});
+
+		// Pad the asset lookups to the nearest 0x10 bytes
+		const assetLookupsPad = 16 - (assetLookupsBuffer.length % 0x10);
+		const padBuffer = Buffer.alloc(assetLookupsPad);
+		assetLookupsBuffer = Buffer.concat([assetLookupsBuffer, padBuffer]);
+
+		return assetLookupsBuffer;
+	}
+
+	function enumerateCompressedStrings(brtJson)
+	{
+		const stringMap = {};
+
+		brtJson.bundleRefs.forEach(bundleRef => {
+			if(bundleRef.Path === "")
+			{
+				return;
+			}
+			
+			if(!stringMap.hasOwnProperty(bundleRef.Path.toLowerCase()))
+			{
+				stringMap[bundleRef.Path.toLowerCase()] = 0;
+			}
+		});
+
+		brtJson.assetLookups.forEach(asset => {
+			if(!stringMap.hasOwnProperty(asset.AssetPath.toLowerCase()))
+			{
+				stringMap[asset.AssetPath.toLowerCase()] = 0;
+			}
+		});
+
+		return stringMap;
+	}
+
+	// Function to write the string table
+	function writeCompressedStringTable(stringMap)
+	{
+		// To save effort, we will just write all complete strings without compression, maintaining format.
+		let stringTableBuffer = Buffer.alloc(0);
+		const stringList = Object.keys(stringMap);
+		stringList.forEach(string => {
+			// If the string length is greater than 127, we need to split it into multiple substrings of no more than 127 bytes and then refer all but the first part to the previous part
+			if(string.length > 127)
+			{
+				const parts = string.match(/.{1,127}/g);
+				parts.forEach((part, index) => {
+					if(index === 0)
+					{
+						stringMap[part] = stringTableBuffer.length;
+
+						// No base string, so write the base string ref as 0xFFFFFFFF
+						const baseStringRefBuffer = Buffer.alloc(4);
+						baseStringRefBuffer.writeUInt32LE(0xFFFFFFFF, 0x0);
+						const partBuffer = Buffer.from(part, 'utf8');
+						stringTableBuffer = Buffer.concat([stringTableBuffer, baseStringRefBuffer, partBuffer]);
+					}
+					else
+					{
+						stringMap[part] = stringTableBuffer.length;
+						const baseStringRefBuffer = Buffer.alloc(4);
+						baseStringRefBuffer.writeUInt16LE(stringMap[parts[index - 1]], 0x0);
+						baseStringRefBuffer.writeUInt8(0x80, 0x2);
+						baseStringRefBuffer.writeUInt8(parts[index - 1].length, 0x3);
+
+						const partBuffer = Buffer.from(part, 'utf8');
+						stringTableBuffer = Buffer.concat([stringTableBuffer, baseStringRefBuffer, partBuffer]);
+					}
+				});
+
+				// For convenience when writing other sections later, set the offset of the complete string in the string map to the offset of the last part
+				stringMap[string] = stringMap[parts[parts.length - 1]];
+
+				return;
+			}
+			
+			stringMap[string] = stringTableBuffer.length;
+
+			// No base string, so write the base string ref as 0xFFFFFFFF
+			const baseStringRefBuffer = Buffer.alloc(4);
+			baseStringRefBuffer.writeUInt32LE(0xFFFFFFFF, 0x0);
+
+			const stringBuffer = Buffer.from(string, 'utf8');
+			stringTableBuffer = Buffer.concat([stringTableBuffer, baseStringRefBuffer, stringBuffer]);
+		});
+
+		// Pad the string table to the nearest 0x10 bytes
+		const stringTablePad = 16 - (stringTableBuffer.length % 0x10);
+
+		const padBuffer = Buffer.alloc(stringTablePad);
+		stringTableBuffer = Buffer.concat([stringTableBuffer, padBuffer]);
+
+		return stringTableBuffer;
+	}
+
+
 	// Function to convert JSON to BRT resource
 	function convertJsonToBrt()
 	{
@@ -486,9 +1011,15 @@
 		// Get the BRT format from the file if present, otherwise ask the user
 		const brtFormat = brtJson.hasOwnProperty("brtFormat") ? brtJson.brtFormat : getBrtFormat();
 
-		if(unsupportedFormats.includes(brtFormat))
+		if(unsupportedWriteFormats.includes(brtFormat))
 		{
 			console.log("Unsupported BRT format. Aborting.");
+			return;
+		}
+
+		if(brtFormat === BRT_FORMATS.BRT_COMPRESSED_STRINGS)
+		{
+			writeCompressedStringBrt(brtJson);
 			return;
 		}
 
@@ -591,7 +1122,7 @@
 
 	}
 
-	const options = ["Convert BRT resource to JSON", "Convert JSON to BRT resource", "Import duplication spreadsheet into BRT JSON", "Exit program"]; 
+	const options = ["Convert BRT resource to JSON", "Convert JSON to BRT resource", "Import duplication spreadsheet into BRT JSON", "Merge two BRT JSON files", "Exit program"]; 
 
 	// Main program logic
 	console.log(`Welcome to BRT Tools ${VERSION_STRING}! This program will help you convert BundleRefTable files.\n`);
@@ -626,6 +1157,10 @@
 			brtManager.importDuplicationSheet();
 		}
 		else if(option === 4)
+		{
+			brtManager.brtMerger();
+		}
+		else if(option === 5)
 		{
 			break;
 		}
