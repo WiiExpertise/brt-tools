@@ -56,6 +56,11 @@ function importItems(brtData, data)
         const origPath = item['Original'];
         const dupePath = item['Dupe'];
 
+        // Split the original path to get the file name
+        const origPathParts = origPath.split('/');
+        const origFileName = origPathParts[origPathParts.length - 1];
+
+        const origFileNameHash = utilFunctions.fnv64HashString(origFileName, 'kCharCaseLower');
         const origHash = utilFunctions.fnv64HashString(origPath, 'kCharCaseLower');
         const dupePathHash = utilFunctions.fnv64HashString(dupePath, 'kCharCaseLower');
 
@@ -69,9 +74,10 @@ function importItems(brtData, data)
 
         // Get the original hash hex string
         const origHashHex = BigInt(origHash).toString(16).padStart(16, '0').match(/.{1,2}/g).reverse().join('');
+        const origFileNameHashHex = BigInt(origFileNameHash).toString(16).padStart(16, '0').match(/.{1,2}/g).reverse().join('');
 
         // Find the asset lookup entry with the orig hash
-        const origAssetLookup = brtData.assetLookups.find(entry => entry.Hash === origHash.toString());
+        const origAssetLookup = brtData.assetLookups.find(entry => entry.Hash === origHash.toString() || entry.Hash === origFileNameHash.toString());
         if(!origAssetLookup)
         {
             console.log(`Original asset lookup not found for hash: ${origHash}. Skipping.`);
@@ -87,28 +93,45 @@ function importItems(brtData, data)
             "Path": dupePathOnly.toLowerCase()
         };
 
-        brtData.assets.push(newAssetEntry);
-        const newAssetIndex = brtData.assets.length - 1;
 
-        const newAssetLookupEntry1 = {
+        if(brtData.brtFormat < 2)
+        {
+            brtData.assets.push(newAssetEntry);
+        }
+        const newAssetIndex = brtData.brtFormat < 2 ? brtData.assets.length - 1 : -1;
+
+        const newAssetLookupEntry1 = brtData.brtFormat < 2 ? {
             "Hash": dupePathHash.toString(10),
             "HexHash": dupePathHashHex,
             "BundleRefIndex": bundleRefIndex,
             "AssetIndex": newAssetIndex,
+        } : {
+            "Hash": dupePathHash.toString(10),
+            "HexHash": dupePathHashHex,
+            "BundleRefIndex": bundleRefIndex,
+            "AssetPath": dupePath.toLowerCase(),
         };
 
-        const newAssetLookupEntry2 = {
+        const newAssetLookupEntry2 = brtData.brtFormat < 2 ? {
             "Hash": dupeFileNameHash.toString(10),
             "HexHash": dupeFileNameHashHex,
             "BundleRefIndex": bundleRefIndex,
             "AssetIndex": newAssetIndex,
+        } : {
+            "Hash": dupeFileNameHash.toString(10),
+            "HexHash": dupeFileNameHashHex,
+            "BundleRefIndex": bundleRefIndex,
+            "AssetPath": dupeFileName.toLowerCase(),
         };
 
         // Add the new asset lookup entries to the asset lookups array
         brtData.assetLookups.push(newAssetLookupEntry1);
         brtData.assetLookups.push(newAssetLookupEntry2);
 
-        brtData.assetCount++;
+        if(brtData.brtFormat < 2)
+        {
+            brtData.assetCount++;
+        }
         brtData.assetLookupCount += 2;
 
 
@@ -170,29 +193,34 @@ function mergeBrts(brt1, brt2)
             continue;
         }
 
-        const newAssetLookup = {
+        const newAssetLookup = brt1.brtFormat < 2 ? {
             Hash: assetLookup.Hash,
             HexHash: assetLookup.HexHash,
             BundleRefIndex: -1, // Placeholder for now
             AssetIndex: -1, // Placeholder for now
+        } : {
+            Hash: assetLookup.Hash,
+            HexHash: assetLookup.HexHash,
+            BundleRefIndex: -1, // Placeholder for now
+            AssetPath: assetLookup.AssetPath,
         };
 
-        const oldAsset = brt2.assets[assetLookup.AssetIndex];
+        const oldAsset = brt1.brtFormat < 2 ? brt2.assets[assetLookup.AssetIndex] : null;
         const oldBundleRef = brt2.bundleRefs[assetLookup.BundleRefIndex];
 
-        const existingAsset = brt1.assets.find(entry => entry.Name === oldAsset.Name && entry.Path === oldAsset.Path);
+        const existingAsset = brt1.brtFormat < 2 ? brt1.assets.find(entry => entry.Name === oldAsset.Name && entry.Path === oldAsset.Path) : null;
         if(existingAsset)
         {
             newAssetLookup.AssetIndex = brt1.assets.indexOf(existingAsset);
         }
 
-        const existingBundleRef = brt1.bundleRefs.find(entry => entry.Name === oldBundleRef.Name && entry.Directory === oldBundleRef.Directory);
+        const existingBundleRef = brt1.brtFormat < 2 ? brt1.bundleRefs.find(entry => entry.Name === oldBundleRef.Name && entry.Directory === oldBundleRef.Directory) : brt1.bundleRefs.find(entry => entry.Path.toLowerCase() === oldBundleRef.Path.toLowerCase());
         if(existingBundleRef)
         {
             newAssetLookup.BundleRefIndex = brt1.bundleRefs.indexOf(existingBundleRef);
         }
 
-        if(newAssetLookup.AssetIndex === -1)
+        if(brt1.brtFormat < 2 && newAssetLookup.AssetIndex === -1)
         {
             // If the asset doesn't exist in BRT 1, add it
             brt1.assets.push(oldAsset);

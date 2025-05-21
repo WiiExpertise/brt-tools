@@ -7,7 +7,7 @@
 	const brtManager = require('./utils/BrtManager');
 
 	// Version number constant
-	const VERSION_STRING = "v1.2 DEV";
+	const VERSION_STRING = "v1.2 DEV 3";
 
 	// Global constants
 	let BRT_HEADER_SIZE = 0x70; // Not constant due to format variations
@@ -24,11 +24,11 @@
 
 	// We currently don't support these formats (for reading and/or writing respectively)
 	const unsupportedReadFormats = [
-		//BRT_FORMATS.BRT_COMPRESSED_STRINGS
+
 	];
 
 	const unsupportedWriteFormats = [
-		//BRT_FORMATS.BRT_COMPRESSED_STRINGS
+
 	];
 
 	// BRT format mapping for different games
@@ -208,8 +208,6 @@
 
 		readNewBundleRefs(fileReader, brtJson, stringMap);
 
-		//console.log(stringMap);
-
 		readNewAssetLookups(fileReader, brtJson, stringMap);
 
 		console.log("Enter a path to save the JSON file, or nothing to use the same path as the BRT file: ");
@@ -238,9 +236,7 @@
 		const assetLookups = [];
 
 		for(let i = 0; i < brtJson.assetLookupCount; i++)
-		{
-			//console.log("Reading asset lookup " + i + " at offset " + fileReader.offset.toString(16));
-			
+		{			
 			const assetLookup = {};
 
 			const rawHash = fileReader.readBytes(8);
@@ -279,9 +275,7 @@
 		const bundleRefs = [];
 
 		for(let i = 0; i < brtJson.bundleRefCount; i++)
-		{
-			//console.log("Reading bundle ref " + i + " at offset " + fileReader.offset.toString(16));
-			
+		{			
 			const bundleRef = {};
 
 			const pathStringRefInfo = readStringRef(fileReader);
@@ -307,18 +301,33 @@
 		brtJson["bundleRefs"] = bundleRefs;
 	}
 
-	function readStringRef(fileReader, signed = true)
+	function readStringRef(fileReader)
 	{
-		const stringOffset = fileReader.readBytes(2).readInt16LE(0);
-		const identifier = fileReader.readBytes(1).readUInt8(0);
+		const stringRefInfo = {};
+		let stringOffsetBytes = fileReader.readBytes(3);
+
+		const empty = stringOffsetBytes.readInt16LE(0) === -1;
+
+		if(empty)
+		{
+			fileReader.readBytes(1);
+			stringRefInfo["stringOffset"] = -1;
+			stringRefInfo["identifier"] = -1;
+			stringRefInfo["strLength"] = -1;
+
+			return stringRefInfo;
+		}
+
+		const stringOffset = stringOffsetBytes.readIntLE(0, 3) & 0x007FFFFF;
+		const identifier = stringOffsetBytes.readUInt8(2) & 0x80;
+
 		const length = fileReader.readBytes(1).readUInt8(0);
 
-		const stringReFInfo = {};
-		stringReFInfo["stringOffset"] = stringOffset;
-		stringReFInfo["identifier"] = identifier;
-		stringReFInfo["strLength"] = length;
+		stringRefInfo["stringOffset"] = stringOffset;
+		stringRefInfo["identifier"] = identifier;
+		stringRefInfo["strLength"] = length;
 
-		return stringReFInfo;
+		return stringRefInfo;
 	}
 
 	function readCompressedString(fileReader, stringRefInfo, stringMap)
@@ -333,35 +342,27 @@
 
 		let currString;
 
-		console.log("Identifier " + stringRefInfo.identifier.toString(16) + " for string at offset " + fileReader.offset.toString(16));
-
-		if(stringRefInfo.identifier === 128 || stringRefInfo.identifier - 1 === 128)
+		if(stringRefInfo.identifier === 1)
 		{
-			console.log("Reading at offset " + fileReader.offset.toString(16));
 			currString = fileReader.readSizedString(stringRefInfo.strLength);
 		}
-		else if(stringRefInfo.identifier === 0 || stringRefInfo.identifier - 1 === 0)
+		else if(stringRefInfo.identifier === 0)
 		{
-			console.log("StringRef identifier is 0 reading string at offset " + stringAddress.toString(16) + " current offset " + fileReader.offset.toString(16));
 			const additionalOffset = fileReader.readBytes(4).readUInt32LE(0);
 			fileReader.offset = stringTablePtr + additionalOffset;
-			console.log("Reading at offset " + fileReader.offset.toString(16));
 			currString = fileReader.readSizedString(stringRefInfo.strLength);
 		}
 		else
 		{
-			console.log("Reading at offset " + fileReader.offset.toString(16));
 			currString = fileReader.readSizedString(stringRefInfo.strLength);
 		}
-
-		//console.log(baseStringRef);
 
 		if(baseStringRef.stringOffset !== -1)
 		{
 			fileReader.offset = stringTablePtr + baseStringRef.stringOffset + 4; // Skip the previous base string ref
 
 			let baseString = "";
-			if(baseStringRef.identifier === 0 || baseStringRef.identifier - 1 === 0)
+			if(baseStringRef.identifier === 0)
 			{
 				fileReader.offset = stringTablePtr + fileReader.readBytes(4).readUInt32LE(0);
 				baseString = fileReader.readSizedString(baseStringRef.strLength);
@@ -370,44 +371,18 @@
 			{
 				baseString = fileReader.readSizedString(baseStringRef.strLength);
 			}
-			//console.log("Base string: " + baseString + " at offset " + fileReader.offset.toString(16));
 			
 			const baseFinalString = readCompressedString(fileReader, baseStringRef, stringMap);
-			console.log("Base string: " + baseString);
-			console.log("Base final string: " + baseFinalString);
-			console.log("Current string: " + currString);
-			console.log("Base string ref length: " + baseStringRef.strLength);
 
 			// Find where baseString occurs in baseFinalString
 			let baseStringIndex = baseFinalString.lastIndexOf(baseString);
 
-			if(baseStringIndex === -1)
-			{
-				//console.log("Base string: " + baseString);
-				//console.log("Base final string: " + baseFinalString);
-				//console.log("Base string ref length: " + baseStringRef.strLength);
-			}
-
-			if(baseString === "")
-			{
-				//console.log("Base string is empty at offset " + fileReader.offset.toString(16));
-			}
-
-			console.log("new components:");
-			console.log(baseFinalString.substring(0, baseStringIndex));
-			console.log(baseString.substring(0, baseStringRef.strLength));
-			console.log(currString);
-
 			// Take everything before baseString from baseFinalString, then take baseStringRef.length from baseString
 			currString = baseFinalString.substring(0, baseStringIndex) + baseString.substring(0, baseStringRef.strLength) + currString;
-
-			console.log("Final string: " + currString);
 		}
 
 		stringMap[stringAddress] = currString;
 		fileReader.offset = origOffset;
-
-		//console.log(stringMap);
 
 		return currString;
 	}
@@ -852,8 +827,10 @@
 			}
 			else
 			{
-				bundleRefBuffer.writeInt16LE(stringMap[bundleRef.Path.toLowerCase()]);
-				bundleRefBuffer.writeUInt8(0x80, 0x2);
+				const finalInt24 = (stringMap[bundleRef.Path.toLowerCase()] & 0x007FFFFF) | 0x800000;
+
+				bundleRefBuffer.writeUIntLE(finalInt24, 0x0, 3);
+
 				bundleRefBuffer.writeUInt8(bundleRef.Path.length, 0x3);
 
 				bundleRefBuffer.writeInt32LE(bundleRef.ParentBundleIndex, 0x4);
@@ -882,7 +859,7 @@
 		});
 
 		brtJson.assetLookups.forEach(assetLookup => {
-			const assetLookupBuffer = Buffer.alloc(0x20);
+			const assetLookupBuffer = Buffer.alloc(0x10);
 
 			// Write the hash
 			const hash = BigInt("0x" + assetLookup.HexHash);
@@ -890,8 +867,9 @@
 
 			assetLookupBuffer.writeInt32LE(assetLookup.BundleRefIndex, 0x8);
 
-			assetLookupBuffer.writeInt16LE(stringMap[assetLookup.AssetPath.toLowerCase()], 0xC);
-			assetLookupBuffer.writeUInt8(0x80, 0xE);
+			const finalInt24 = (stringMap[assetLookup.AssetPath.toLowerCase()] & 0x007FFFFF) | 0x800000;
+
+			assetLookupBuffer.writeUIntLE(finalInt24, 0xC, 3);
 			assetLookupBuffer.writeUInt8(assetLookup.AssetPath.length, 0xF);
 
 			assetLookupsBuffer = Buffer.concat([assetLookupsBuffer, assetLookupBuffer]);
@@ -957,8 +935,9 @@
 					{
 						stringMap[part] = stringTableBuffer.length;
 						const baseStringRefBuffer = Buffer.alloc(4);
-						baseStringRefBuffer.writeUInt16LE(stringMap[parts[index - 1]], 0x0);
-						baseStringRefBuffer.writeUInt8(0x80, 0x2);
+						// We want to write the offset and identifier as one int24LE with the identifier in the most significant bit
+						const finalInt24 = (stringMap[parts[index - 1]] & 0x007FFFFF) | 0x800000;
+						baseStringRefBuffer.writeUIntLE(finalInt24, 0x0, 3);
 						baseStringRefBuffer.writeUInt8(parts[index - 1].length, 0x3);
 
 						const partBuffer = Buffer.from(part, 'utf8');
