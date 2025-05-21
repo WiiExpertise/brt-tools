@@ -9,11 +9,13 @@ This means in order to add new assets for modding, they must be added to the BRT
 - Convert BRT .res file to .json
 - Convert .json file to BRT .res file
 - Add entries for duplicated assets to a BRT JSON file using a provided Excel file
+- Merge multiple BRT JSON files into a single BRT JSON file
 
 ## Currently Supported Games (full support unless otherwise noted)
 - Madden NFL 24
 - Madden NFL 25
 - EA SPORTS FC 24
+- EA SPORTS FC 25
 - Dragon Age: The Veilguard
 
 ## Adding New Games
@@ -67,3 +69,4 @@ Once you have nexe installed, you can simply run the ``buildExe.bat`` script inc
 ## Acknowledgements
 Thanks to the following people for their contributions:
 - **wannkunstbeikor** - For researching the BRT resource format and providing the format information. This project would not be possible otherwise.
+- **FIFER** - For helping research the compressed string BRT format and assisting with testing
