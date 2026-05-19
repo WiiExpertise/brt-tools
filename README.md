@@ -14,6 +14,7 @@ This means in order to add new assets for modding, they must be added to the BRT
 ## Currently Supported Games (full support unless otherwise noted)
 - Madden NFL 24
 - Madden NFL 25
+- Madden NFL 26
 - EA SPORTS FC 24
 - EA SPORTS FC 25
 - Dragon Age: The Veilguard
